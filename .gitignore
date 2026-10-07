@@ -1,0 +1,11 @@
+# Секреты и локальные данные: никогда не коммитить
+.env
+*.env
+*.key
+credentials*.json
+*.sql.dump
+*.dump
+*.csv
+resumes/
+data/
+.DS_Store

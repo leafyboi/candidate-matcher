@@ -1,0 +1,245 @@
+{
+  "name": "Candidate Matcher",
+  "nodes": [
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Ты — IT-рекрутер. Твоя задача — извлечь параметры поиска из текста вакансии для фильтрации резюме в базе.\n\nВерни СТРОГО чистый JSON:\n{\n  \"target_roles\": [\n    \"Все синонимы и названия целевой должности на русском и английском, включая сокращения, технические эквиваленты и варианты без спецсимволов. \n     Примеры:\n     - Для .NET / C#: ['.NET', 'C#', 'CDeveloper', 'dotnet', 'C-sharp']\n     - Для Go: ['Golang', 'Go developer', 'Go разработчик']\n     - Для QA: ['QA', 'тестиров', 'AQA', 'SDET', 'test engineer']\n     - Для Системного аналитика: ['системный аналитик', 'system analyst', 'SA']\n     - Для Frontend: ['Frontend', 'React', 'Vue', 'Angular', 'веб-разработчик']\"\n  ],\n  \"tech_keywords\": [\"все требования по вакансии. например: ['C#', '.NET', 'SQL', 'Kafka', 'ДБО'],\n  \"location\": \"Город, ЕСЛИ строго требуется присутствие в офисе (например: 'Москва'). Если удаленка/гибрид без привязки — null\"\n}\n\nТекст вакансии:\n{{ $json.message.text }}",
+        "messages": {
+          "messageValues": []
+        },
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        -1024,
+        496
+      ],
+      "id": "a88119d1-8e17-43ee-b2b9-19e0a114b18d",
+      "name": "Basic LLM Chain"
+    },
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.5,
+      "position": [
+        -1248,
+        496
+      ],
+      "id": "9d50cda3-0bc6-44f9-9e7d-ab66b4dc0d98",
+      "name": "Telegram Trigger"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "{{ $json.query }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -464,
+        496
+      ],
+      "id": "1c73134e-a6e0-4af0-89e2-374467d405b0",
+      "name": "Execute a SQL query",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all().map(i => i.json);\n\nif (!items.length || !items[0].text) {\n  return [{\n    json: {\n      final_text: \"🔍 <b>По вашему запросу подходящих кандидатов не найдено.</b>\"\n    }\n  }];\n}\n\nconst cards = items.map(item => {\n  let text = item.text || \"\";\n  \n  // <br> в перенос строки\n  text = text.replace(/<br\\s*[\\/]?>/gi, '\\n');\n  \n  // убираем <p>\n  text = text.replace(/<\\/p>/gi, '\\n').replace(/<p>/gi, '');\n  \n  return text.trim();\n});\n\nconst separator = \"\\n\\n\" + \"—\".repeat(22) + \"\\n\\n\";\n\nreturn [{\n  json: {\n    final_text: cards.join(separator)\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        64,
+        496
+      ],
+      "id": "c7b2f1ec-6338-4348-87b6-8f036ee469a9",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').first().json.message.chat.id }}",
+        "text": "={{ $json.final_text }}",
+        "additionalFields": {
+          "parse_mode": "HTML"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        288,
+        496
+      ],
+      "id": "542dc9fe-0ac9-4480-a2e9-4ca7240f0627",
+      "name": "Send a text message1"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Ты — IT-рекрутер. Оцени соответствие кандидата вакансии.\n\nТребования:\n- Оценивай только коммерческий опыт в целевом стеке.\n- Если требуется Senior (от 6 лет), а кандидат работал на целевом стеке меньше 2 лет — ставь RED FLAG и оценку не выше 5/10.\n- Оценивай стек технологий, архитектурные задачи и уровень грейда строго по проектам за последние 5 лет. Опыт старше 5 лет используй только для подтверждения общего трудового стажа, не начисляя за него баллы за актуальный стек.\n- Формат локации: если нужен офис в Москве, удаленщики из других городов — RED FLAG.\n\nФормат ответа (HTML):\n🎯 <b>ОЦЕНКА СООТВЕТСТВИЯ: [X из 10]</b>\n\n<b>ФИО:</b> {{ $json.fio }} | {{ $json.position }}\n<b>Контакты:</b> {{ $json.phone }} | {{ $json.email }}\n\n<b>🚩 RED FLAGS:</b> [Критические стоп-факторы или \"Нет\"]\n<b>Сводка:</b> [2-3 предложения: профильный стаж, домен, соответствие. Если опыта не было, но \"Аналог/Подразумевается\", обоснуй почему (например: \"В резюме указан FastAPI, что гарантирует быстрое освоение Django\" или \"Работал по Agile в Enterprise, опыт работы с таск-трекерами вроде Jira подразумевается]\n<b>Стек:</b> [Кратко: совпавшие технологии]\n\nВопросы для скрининга (Grey Areas)\n[Сформулируй до 3 точечных вопроса для созвона по тем пунктам, где статус \"Нет опыта\", \"Аналог\" или \"Подразумевается\", чтобы быстро проверить реальное наличие навыка].\n\n«Форматируй ответ строго тезисно. Сводка — максимум 2 предложения. Вопросы — не более 2 штук без вежливых вступлений.» - нужно уложиться в лимит 800 символов\nВакансия:\n\n{{ $('Telegram Trigger').item.json.message.text }}\n\nРезюме:\n{{ $json.resume_text }}",
+        "messages": {
+          "messageValues": []
+        },
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        -256,
+        496
+      ],
+      "id": "40e59015-8697-4741-89cd-9b6218e2aa63",
+      "name": "Basic LLM Chain1",
+      "retryOnFail": true,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "let raw = $input.first().json.text || \"{}\";\nraw = raw.replace(/```json/gi, '').replace(/```/g, '').trim();\n\nlet parsed = {};\ntry {\n  parsed = JSON.parse(raw);\n} catch (e) {\n  parsed = {};\n}\n\nconst clean = (s) => String(s).replace(/'/g, \"''\").trim();\n\nconst targetRoles = (parsed.target_roles || []).map(clean).filter(Boolean);\nconst techKeywords = (parsed.tech_keywords || []).map(clean).filter(Boolean);\nconst location = parsed.location ? clean(parsed.location) : null;\n\n// фильтр: роль в должности или технология в резюме\nconst roleMatches = targetRoles.map(r => `c.position ILIKE '%${r}%'`);\nconst techMatches = techKeywords.map(t => `c.resume_text ILIKE '%${t}%'`);\n\nconst whereClause = roleMatches.length > 0 \n  ? `(${roleMatches.join(\" OR \")})` \n  : (techMatches.length > 0 ? `(${techMatches.join(\" OR \")})` : \"1=1\");\n\n// город, если нужен офис\nconst locCondition = location ? `AND (c.resume_text ILIKE '%${location}%')` : \"\";\n\n// сортировка: роль в должности +10, каждая технология +1\nconst roleScore = roleMatches.length > 0\n  ? `(CASE WHEN ${roleMatches.join(\" OR \")} THEN 10 ELSE 0 END)`\n  : \"0\";\n\nconst techScoreParts = [\"0\"];\ntechKeywords.forEach(tech => {\n  techScoreParts.push(`(CASE WHEN c.resume_text ILIKE '%${tech}%' THEN 1 ELSE 0 END)`);\n});\nconst techScoreFormula = techScoreParts.join(\" + \");\n\nconst sql = `\nSELECT \n    c.id,\n    c.fio,\n    c.position,\n    c.phone,\n    c.email,\n    c.profiles,\n    c.resume_file,\n    LEFT(c.resume_text, 20000) AS resume_text\nFROM candidates c\nWHERE \n    ${whereClause}\n    ${locCondition}\nORDER BY (${roleScore} + ${techScoreFormula}) DESC\nLIMIT 5;\n`.trim();\n\nreturn [{\n  json: { query: sql }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -688,
+        496
+      ],
+      "id": "0e2494b2-ae9a-409d-bc8e-a96034650ebd",
+      "name": "SQL JSON"
+    },
+    {
+      "parameters": {
+        "model": "=deepseek/deepseek-v4-flash-0731",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        -1024,
+        688
+      ],
+      "id": "22fd508e-4a66-4e4a-89fc-567c1ea72615",
+      "name": "OpenRouter Chat Model"
+    },
+    {
+      "parameters": {
+        "model": "=deepseek/deepseek-v4-flash-0731",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        -256,
+        688
+      ],
+      "id": "2d8a09d2-6515-406b-874c-2a5655e889db",
+      "name": "OpenRouter Chat Model1"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Basic LLM Chain": {
+      "main": [
+        [
+          {
+            "node": "SQL JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Basic LLM Chain",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute a SQL query": {
+      "main": [
+        [
+          {
+            "node": "Basic LLM Chain1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Send a text message1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Basic LLM Chain1": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SQL JSON": {
+      "main": [
+        [
+          {
+            "node": "Execute a SQL query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Basic LLM Chain1",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Basic LLM Chain",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
